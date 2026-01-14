@@ -146,12 +146,31 @@ class SubscriptionOffer {
   }
 }
 
+class PromotionalOfferPurchase {
+  final String offerID;
+  final String compactJWS;
+
+  PromotionalOfferPurchase({
+    required this.offerID,
+    required this.compactJWS,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': offerID,
+      'compactJWS': compactJWS,
+    };
+  }
+}
+
 class PurchaseOptions {
   final String? appAccountToken; // UUID string
+  final PromotionalOfferPurchase? promotionalOffer;
   final SubscriptionOffer? winBackOffer;
 
   PurchaseOptions({
     this.appAccountToken,
+    this.promotionalOffer,
     this.winBackOffer,
   });
 
@@ -160,6 +179,10 @@ class PurchaseOptions {
 
     if (appAccountToken != null) {
       map['appAccountToken'] = appAccountToken;
+    }
+
+    if (promotionalOffer != null) {
+      map['promotionalOffer'] = promotionalOffer!.toMap();
     }
 
     if (winBackOffer != null) {

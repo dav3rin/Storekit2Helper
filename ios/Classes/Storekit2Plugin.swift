@@ -204,6 +204,23 @@ public class Storekit2Plugin: NSObject, FlutterPlugin {
                         purchaseOptions.insert(.appAccountToken(uuid))
                     }
 
+                    // Parse promotional offer with JWS signature
+                    if let promoOfferData = args["promotionalOffer"] as? [String: Any],
+                        let offerId = promoOfferData["id"] as? String,
+                        let compactJWS = promoOfferData["compactJWS"] as? String
+                    {
+                        // Use the promotional offer with JWS signature for validation
+                        let promoOptions = Product.PurchaseOption.promotionalOffer(
+                            offerId,  // First parameter has no label (underscore in signature)
+                            compactJWS: compactJWS
+                        )
+
+                        // Insert all promotional offer options
+                        for option in promoOptions {
+                            purchaseOptions.insert(option)
+                        }
+                    }
+
                     // Parse win-back offer (iOS 18.0+)
                     if #available(iOS 18.0, *) {
                         if let winBackOfferData = args["winBackOffer"] as? [String: Any],

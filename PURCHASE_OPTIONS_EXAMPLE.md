@@ -60,8 +60,46 @@ await Storekit2Helper.buyProduct(
 
 ### 3. Purchase With Promotional Offer
 
+Promotional offers require a JWS (JSON Web Signature) from your server to validate the offer. This ensures security and prevents unauthorized use of promotional offers.
+
+**Simple example (just need offer ID):**
 ```dart
-// First, fetch the product to get available promotional offers
+// You only need the offer ID - no need for the full SubscriptionOffer object
+final offerId = 'your_promo_offer_id'; // e.g., "summer_2024_promo"
+
+// Get JWS from your server
+final jwsSignature = await yourBackend.getPromotionalOfferJWS(
+  productId: 'your.subscription.id',
+  offerId: offerId,
+  userId: currentUserId,
+);
+
+// Create the promotional offer purchase with both fields
+final promoOffer = PromotionalOfferPurchase(
+  offerID: offerId,
+  compactJWS: jwsSignature,
+);
+
+final options = PurchaseOptions(
+  promotionalOffer: promoOffer,
+);
+
+await Storekit2Helper.buyProduct(
+  'your.subscription.id',
+  (success, transaction, errorMessage) {
+    if (success) {
+      print('Purchase with promotional offer successful!');
+    } else {
+      print('Purchase failed: $errorMessage');
+    }
+  },
+  options: options,
+);
+```
+
+**Or fetch available offers first:**
+```dart
+// Optionally, fetch the product to see available promotional offers
 final products = await Storekit2Helper.fetchProducts(['your.subscription.id']);
 final product = products.first;
 
@@ -69,9 +107,24 @@ final product = products.first;
 if (product.hasPromotionalOffers) {
   final promoOffer = product.promotionalOffers.first;
   
-  // Create purchase options with the promotional offer
+  // IMPORTANT: Get the JWS signature from your backend server
+  // Your server must generate this using Apple's signing requirements
+  // See: https://developer.apple.com/documentation/storekit/in-app_purchase/original_api_for_in-app_purchase/subscriptions_and_offers/generating_a_signature_for_promotional_offers
+  final jwsSignature = await yourBackend.getPromotionalOfferJWS(
+    productId: product.productId,
+    offerId: promoOffer.id!,
+    userId: currentUserId,
+  );
+  
+  // Create the promotional offer purchase
+  final promoOfferPurchase = PromotionalOfferPurchase(
+    offerID: promoOffer.id!,
+    compactJWS: jwsSignature, // Required for validation
+  );
+  
+  // Create purchase options
   final options = PurchaseOptions(
-    promotionalOffer: promoOffer,
+    promotionalOffer: promoOfferPurchase,
   );
   
   // Execute purchase with options
@@ -87,6 +140,46 @@ if (product.hasPromotionalOffers) {
     },
     options: options,
   );
+}
+```
+
+#### Generating JWS Signatures (Server-Side)
+
+Your backend server must generate the JWS signature using:
+- **App Bundle ID**: Your app's bundle identifier
+- **Product Identifier**: The subscription product ID
+- **Offer Identifier**: The promotional offer ID
+- **Application Username**: Optional user identifier
+- **Nonce**: A UUID for this transaction
+- **Timestamp**: Current timestamp in milliseconds
+
+The signature must be created using your **Subscription Key** from App Store Connect and signed with ES256 algorithm.
+
+**Example server-side implementation (Node.js):**
+```javascript
+const jwt = require('jsonwebtoken');
+const fs = require('fs');
+
+function generatePromotionalOfferJWS(params) {
+  const privateKey = fs.readFileSync('SubscriptionKey.p8');
+  
+  const payload = {
+    iss: 'YOUR_ISSUER_ID',
+    iat: Math.floor(Date.now() / 1000),
+    bid: params.bundleId,
+    pid: params.productId,
+    oid: params.offerId,
+    aud: 'appstoreconnect-v1',
+    nonce: params.nonce,
+    uid: params.userId, // optional
+  };
+  
+  const token = jwt.sign(payload, privateKey, {
+    algorithm: 'ES256',
+    keyid: 'YOUR_KEY_ID',
+  });
+  
+  return token;
 }
 ```
 
@@ -161,8 +254,21 @@ if (product.hasPromotionalOffers) {
   final promoOffer = product.promotionalOffers.first;
   final userUuid = 'your-user-uuid-from-backend';
   
+  // Get JWS from your server
+  final jwsSignature = await yourBackend.getPromotionalOfferJWS(
+    productId: product.productId,
+    offerId: promoOffer.id!,
+    userId: userUuid,
+  );
+  
+  // Create the promotional offer purchase
+  final promoOfferPurchase = PromotionalOfferPurchase(
+    offerID: promoOffer.id!,
+    compactJWS: jwsSignature,
+  );
+  
   final options = PurchaseOptions(
-    promotionalOffer: promoOffer,
+    promotionalOffer: promoOfferPurchase,
     appAccountToken: userUuid,
   );
   
@@ -191,8 +297,10 @@ if (product.hasPromotionalOffers) {
 ### Promotional Offers
 - Configured in App Store Connect
 - Can be applied to new or existing subscribers
-- Require passing as a purchase option
+- **Require JWS signature from your server** for security
+- Must pass both offer and JWS as purchase options
 - Access via `product.promotionalOffers` list
+- See [Generating a Signature for Promotional Offers](https://developer.apple.com/documentation/storekit/in-app_purchase/original_api_for_in-app_purchase/subscriptions_and_offers/generating_a_signature_for_promotional_offers)
 
 ### Win-Back Offers (iOS 18.0+)
 - Designed to re-engage lapsed subscribers
@@ -224,6 +332,100 @@ class SubscriptionOffer {
 4. **Use app account tokens** to link transactions to your backend users
 5. **Test thoroughly** in sandbox and TestFlight before production
 6. **Handle errors gracefully** - purchases can fail for many reasons
+
+## Security for Promotional Offers
+
+### Why JWS Signatures Are Required
+
+Promotional offers require server-side JWS (JSON Web Signature) validation to:
+- **Prevent fraud**: Ensures only authorized users can apply promotional offers
+- **Validate authenticity**: Proves the offer request comes from your backend
+- **Link to users**: Associates the offer with a specific user account
+- **Audit trail**: Provides server-side tracking of who received which offers
+
+### Important Security Notes
+
+⚠️ **Never generate JWS signatures on the client side**
+- Your subscription key must remain on your server
+- Client-side generation would expose your private key
+- This would allow anyone to apply any promotional offer
+
+✅ **Server-side generation requirements:**
+1. Store your Subscription Key (`.p8` file) securely on your server
+2. Generate JWS using the ES256 algorithm
+3. Include all required claims (iss, iat, bid, pid, oid, aud, nonce)
+4. Use a unique nonce (UUID) for each signature
+5. Optionally include application username (uid) to link to user
+
+✅ **Testing in Sandbox:**
+- Use your sandbox Subscription Key from App Store Connect
+- Test with sandbox Apple IDs
+- Verify signatures are validated correctly
+- Check that invalid signatures are rejected
+
+### JWS Signature Claims
+
+Required claims for promotional offer signatures:
+
+| Claim | Description | Example |
+|-------|-------------|---------|
+| `iss` | Issuer ID from App Store Connect | `"69a6de7d-..."` |
+| `iat` | Issued at timestamp (seconds) | `1704985200` |
+| `bid` | App bundle identifier | `"com.example.app"` |
+| `pid` | Product identifier | `"com.example.monthly"` |
+| `oid` | Offer identifier | `"promo_summer_2024"` |
+| `aud` | Audience (always this value) | `"appstoreconnect-v1"` |
+| `nonce` | Unique UUID for this signature | `"a1b2c3d4-..."` |
+| `uid` | Application username (optional) | `"user123"` |
+
+### Example Server Implementation (Python with PyJWT)
+
+```python
+import jwt
+import time
+import uuid
+from pathlib import Path
+
+def generate_promotional_offer_jws(
+    product_id: str,
+    offer_id: str,
+    bundle_id: str,
+    user_id: str = None
+):
+    # Load your subscription key from App Store Connect
+    key_path = Path("SubscriptionKey_ABC123DEF.p8")
+    with open(key_path, 'r') as f:
+        private_key = f.read()
+    
+    # Your credentials from App Store Connect
+    KEY_ID = "ABC123DEF"  # Key ID
+    ISSUER_ID = "69a6de7d-..."  # Issuer ID
+    
+    # Build the payload
+    payload = {
+        "iss": ISSUER_ID,
+        "iat": int(time.time()),
+        "bid": bundle_id,
+        "pid": product_id,
+        "oid": offer_id,
+        "aud": "appstoreconnect-v1",
+        "nonce": str(uuid.uuid4()),
+    }
+    
+    # Optionally include user ID
+    if user_id:
+        payload["uid"] = user_id
+    
+    # Generate the JWS
+    token = jwt.encode(
+        payload,
+        private_key,
+        algorithm="ES256",
+        headers={"kid": KEY_ID}
+    )
+    
+    return token
+```
 
 ## Error Handling
 
